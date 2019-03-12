@@ -535,7 +535,9 @@ class TerraGAN {
         return gLoss;
     }
 
+    // TESTING
     //---------------------
+
     // INFERENCE
     //---------------------
 
@@ -544,8 +546,8 @@ class TerraGAN {
 
     }
 
-    //---------------------
-    // HELPERS
+
+    // UTILS
     //---------------------
 
     // TODO
@@ -588,7 +590,6 @@ class TerraGAN {
         this.dcgan.summary();
     }
 
-    //---------------------
     // DEPRICATED
     //---------------------
 
@@ -1050,69 +1051,3 @@ class Slice extends tf.layers.Layer {
 // Regsiter the custom layer, so TensorFlow.js knows what class constructor to call when deserializing an saved instance of the custom layer.
 tf.serialization.registerClass(MiniBatchDisc);
 tf.serialization.registerClass(Slice);
-
-//??-MAIN TEST-------------------------------------------------------------------------
-const terraGAN = new TerraGAN({
-    inputShape: [256, 256, 1],
-    outputShape: [256, 256, 1],
-    patchDim: [64, 64],
-    genFilters: 32,
-    disFilters: 32,
-    loadData: false,
-    summary: true,
-});
-
-terraGAN.loadData({
-    datasetDirectory: './src/img',
-    location: 'yosemite',
-    width: 256,
-    height: 256,
-    scale: 8,
-    dataset: 'train',
-    channels: [['topo'], ['grid_8_bin']],
-    numSamples: 1000,
-    dataType: '.png'
-});
-
-terraGAN.train({
-    modelTag: 'trial1',
-    modelDirectory: 'models',
-    epochs: 800,
-    batchesPerEpoch: 100,
-    batchSize: [1, 1],
-    logOnBatch: true,
-    logOnEpoch: true,
-    saveOnEpoch: 10
-});
-//??-MAIN TEST-------------------------------------------------------------------------
-
-
-//?? MISC TESTING---------------------------------------------------------
-// p2p.discriminator.summary();
-// p2p.generator.summary();
-
-// console.log(p2p.dataLoader.datasetPathsA[0].length);
-// for (let i = 0; i < epochs; i++) {
-//     p2p.trainBatch(1);
-// }
-// let y = tf.zeros([4, 32]);
-// let x = tf.ones([4, 100, 5]);
-
-// const diffs = tf.sub(tf.expandDims(x, 3), tf.expandDims(tf.transpose(x, [1, 2, 0]), 0));
-// const abs_diffs = tf.sum(tf.abs(diffs), 2);
-// x = tf.sum(tf.exp(tf.neg(abs_diffs)), 2);
-
-// let z = tf.concat([y, x], 1);
-// console.log(y.shape);
-// console.log(x.shape);
-// console.log(z.shape);
-// const fakeA = tf.ones([16, 256, 256, 1]);
-// const fake1 = tf.ones([fakeA.shape[0], 1]);
-// const fake2 = tf.zeros([fakeA.shape[0], 1]);
-// const fake = tf.concat([fake1, fake2], 1);
-
-// console.log(fake.shape);
-// fake.print();
-//?? MISC TESTING---------------------------------------------------------
-
-
