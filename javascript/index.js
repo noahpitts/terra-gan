@@ -1,9 +1,12 @@
 require('./TerraGAN.js');
 
 const datasetDir = '../terra-datasets/temp'
-const modelDir = '../terra-models/temp'
+const modelTempDir = '../terra-models/temp'
+// const modelExportDir = '../terra-models/public'
 
-//??-MAIN TEST-------------------------------------------------------------------------
+// ??-MAIN TEST LOOP-----
+
+
 const terraGAN = new TerraGAN({
     inputShape: [256, 256, 1],
     outputShape: [256, 256, 1],
@@ -28,7 +31,7 @@ terraGAN.loadData({
 
 terraGAN.train({
     modelTag: 'trial1',
-    modelDirectory: modelDir,
+    modelDirectory: modelTempDir,
     epochs: 800,
     batchesPerEpoch: 100,
     batchSize: [1, 1],
@@ -36,4 +39,6 @@ terraGAN.train({
     logOnEpoch: true,
     saveOnEpoch: 10
 });
-//??-MAIN TEST-------------------------------------------------------------------------
+
+
+// ??-MAIN TEST LOOP-----

@@ -1,4 +1,4 @@
-const tf = require('@tensorflow/tfjs-node-gpu');
+const tf = require('@tensorflow/tfjs');
 const Jimp = require('jimp');
 
 // Terra GAN Model Builder
@@ -31,7 +31,7 @@ class TerraGAN {
         // ------------------------
         // Number of Generator and Discriminator Filters
         this.genFilters = (params.genFilters) ? params.genFilters : 32;
-        this.disFilters = (params.disFilters) ? params.disFilters : 32;
+        this.dFilters = (params.disFilters) ? params.disFilters : 32;
 
         // ------------------------
         // Define Optimizers
@@ -41,6 +41,12 @@ class TerraGAN {
         this.epsilon = (params.epsilon) ? params.epsilon : 1e-08;
         this.adamGAN = tf.train.adam(this.learningRate, this.beta1, this.beta2, this.epsilon);
         this.adamDisc = tf.train.adam(this.learningRate, this.beta1, this.beta2, this.epsilon);
+
+        // ------------------------
+        // Random Initializers for the Conv and Batch Normal Layers
+        this.randomSeed = (params.randsomSeed !== undefined) ? params.randsomSeed : 2019;
+        this.cvInitializer = tf.initializers.randomNormal(0.0, 0.02, this.randomSeed);
+        this.bnInitializer = tf.initializers.randomNormal(1.0, 0.02, this.randomSeed);
 
         // ----------------------
         // Build PatchDiscriminator - the patch gan averages loss across sub patches of the image
@@ -55,6 +61,7 @@ class TerraGAN {
 
         // ----------------------
         // Build Generator - Our generator is an AutoEncoder with U-NET skip connections
+        this.UNET = true;
         this.generator = this.buildGenerator();
 
         // -------------------------
@@ -79,9 +86,8 @@ class TerraGAN {
         if (params.summary) this.summary();
     }
 
-    //---------------------
-    // STRUCTURE
-    //---------------------
+// BUILD
+//---------------------
 
     buildDCGAN() {
 
@@ -140,41 +146,80 @@ class TerraGAN {
         // 2. Generates an image from this image
 
         // Convolution-BatchNorm-ReLU layer with k ﬁlters.
-        function conv2d(layer_input, filters, f_size = 4, bn = true) {
+        function convLayer(name, inputLayer, numFilters, kernelSize = [4,4], bn = true) {
 
             // Convolutional Layer
-            let d = tf.layers.conv2d({ kernelSize: f_size, filters: filters, strides: 2, padding: 'same' }).apply(layer_input);
+            let c = tf.layers.conv2d({
+                name: name + '_conv',
+                kernelSize: kernelSize,
+                filters: numFilters,
+                strides: [2,2],
+                padding: 'same',
+                kernelInitializer=this.cvInitializer
+            }).apply(inputLayer);
 
             // Batch Normalization Layer
-            if (bn) d = tf.layers.batchNormalization({ momentum: 0.8 }).apply(d);
+            if (bn) c = tf.layers.batchNormalization({ 
+                name: name + '_bnorm',
+                axis: 3,
+                epsilon: 1e-5,
+                momentum: 0.1,
+                gammaInitializer=this.bnInitializer
+             }).apply(c);
 
             // Leaky ReLU Layer
-            d = tf.layers.leakyReLU({ alpha: 0.2 }).apply(d);
+            c = tf.layers.leakyReLU({
+                name: name + '_lrelu',
+                alpha: 0.2
+            }).apply(c);
 
-            return d;
+            return c;
         }
 
         // Convolution-BatchNorm-Dropout-ReLUlayer with a dropout rate of 50%
-        function deconv2d(layer_input, skip_input, filters, f_size = 4, dropout_rate = 0.5) {
+        function deconvLayer(name, layer_input, skip_input, numFilters, f_size = [4, 4], dropout_rate = 0.5) {
             //Upsampling Layer
-            let u = tf.layers.upSampling2d({ size: [2, 2] }).apply(layer_input);
+            let d = tf.layers.upSampling2d({
+                name: name + '_upsample',
+                size: [2, 2]
+            }).apply(layer_input);
 
             // Convolutional Layer
-            u = tf.layers.conv2d({ kernelSize: f_size, filters: filters, strides: 1, padding: 'same' }).apply(u);
+            d = tf.layers.conv2d({
+                name: name + '_conv',
+                kernelSize: f_size,
+                filters: numFilters,
+                strides: [1,1],
+                padding: 'same',
+                kernelInitializer=this.cvInitializer
+            }).apply(d);
 
             // Batch Normalization Layer
-            u = tf.layers.batchNormalization({ momentum: 0.8 }).apply(u);
+            d = tf.layers.batchNormalization({
+                name: name + '_bnorm',
+                axis: 3,
+                epsilon: 1e-5,
+                momentum: 0.1,
+                gammaInitializer=this.bnInitializer
+            }).apply(d);
 
             // Dropout Layer
-            if (dropout_rate) u = tf.layers.dropout({ rate: dropout_rate }).apply(u);
+            if (dropout_rate) d = tf.layers.dropout({
+                name: name + '_dropout',
+                rate: dropout_rate
+            }).apply(d);
 
             // Concatination (skip connections) Layer
-            if (UNET) u = tf.layers.concatenate().apply([u, skip_input]);
+            if (this.UNET) d = tf.layers.concatenate({
+                name: name + '_unet'
+            }).apply([d, skip_input]);
 
             // Leaky ReLU Layer
-            u = tf.layers.reLU().apply(u);
+            d = tf.layers.reLU({
+                name: name + '_relu'
+            }).apply(d);
 
-            return u;
+            return d;
         }
 
         // -------------------------------
@@ -184,16 +229,16 @@ class TerraGAN {
         // -------------------------------
 
         // Image input
-        const input = tf.input({ shape: this.inputShape, name: 'unet_input' });
+        const input = tf.input({ shape: this.inputShape, name: 'G_input' });
 
-        const d1 = conv2d(input, this.genFilters, 4, false); // default: C64
-        const d2 = conv2d(d1, this.genFilters * 2);          // default: C128
-        const d3 = conv2d(d2, this.genFilters * 4);          // default: C256
-        const d4 = conv2d(d3, this.genFilters * 8);          // default: C512
-        const d5 = conv2d(d4, this.genFilters * 8);          // default: C512
-        const d6 = conv2d(d5, this.genFilters * 8);          // default: C512
-        const d7 = conv2d(d6, this.genFilters * 8);          // default: C512
-        const d8 = conv2d(d7, this.genFilters * 8);          // default: C512
+        const c1 = convLayer('G1c', input, this.genFilters, [4,4], false);     // default: C64
+        const c2 = convLayer('G2c', c1, this.genFilters * 2);                  // default: C128
+        const c3 = convLayer('G3c', c2, this.genFilters * 4);                  // default: C256
+        const c4 = convLayer('G4c', c3, this.genFilters * 8);                  // default: C512
+        const c5 = convLayer('G5c', c4, this.genFilters * 8);                  // default: C512
+        const c6 = convLayer('G6c', c5, this.genFilters * 8);                  // default: C512
+        const c7 = convLayer('G7c', c6, this.genFilters * 8);                  // default: C512
+        const c8 = convLayer('G8c', c7, this.genFilters * 8);                  // default: C512
 
         //-------------------------------
         // DECODER
@@ -202,13 +247,13 @@ class TerraGAN {
         // also adds skip connections (Concatenate). Takes input from previous layer matching encoder layer
         //-------------------------------
 
-        const u1 = deconv2d(d8, d7, this.genFilters * 8);    // default: C512
-        const u2 = deconv2d(u1, d6, this.genFilters * 16);   // default: C1024
-        const u3 = deconv2d(u2, d5, this.genFilters * 16);   // default: C1024
-        const u4 = deconv2d(u3, d4, this.genFilters * 16);   // default: C1024
-        const u5 = deconv2d(u4, d3, this.genFilters * 16);   // default: C1024
-        const u6 = deconv2d(u5, d2, this.genFilters * 8);    // default: C512
-        const u7 = deconv2d(u6, d1, this.genFilters * 4);    // default: C256
+        const d1 = deconvLayer('G1d', c8, c7, this.genFilters * 8);                     // default: C512
+        const d2 = deconvLayer('G2d', d1, c6, this.genFilters * 8);                     // default: C512
+        const d3 = deconvLayer('G3d', d2, c5, this.genFilters * 8);                     // default: C512
+        const d4 = deconvLayer('G4d', d3, c4, this.genFilters * 8, dropout=false);      // default: C512
+        const d5 = deconvLayer('G5d', d4, c3, this.genFilters * 4, dropout=false);      // default: C256
+        const d6 = deconvLayer('G6d', d5, c2, this.genFilters * 2, dropout=false);      // default: C128
+        const d7 = deconvLayer('G7d', d6, c1, this.genFilters * 0, dropout=false);      // default: C64
 
         // ?? Why no C128 Layer Here
 
@@ -216,15 +261,21 @@ class TerraGAN {
         // to map to the number of output channels (3 in general,
         // except in colorization, where it is 2), followed by a Tanh
         // function.
-        const u8 = tf.layers.upSampling2d({ size: [2, 2] }).apply(u7);
+        const d8 = tf.layers.upSampling2d({
+            name: 'G8d_upsample',
+            size: [2, 2]
+        }).apply(d7);
+
+
         const output = tf.layers.conv2d({
             name: 'unet_output',
             kernelSize: 4,
             filters: this.outputChannels,
-            strides: 1,
+            strides: [1, 1],
             activation: 'tanh',
-            padding: 'same'
-        }).apply(u8);
+            padding: 'same',
+            kernelInitializer=this.cvInitializer
+        }).apply(d8);
 
         // return Model(input, output)
         return tf.model({ inputs: input, outputs: output });
@@ -238,48 +289,61 @@ class TerraGAN {
         // otherwise, it scales from 64
         // 1 layer block = Conv - BN - LeakyRelu
         // -------------------------------
-        function dLayer(layer_input, filters, f_size = 4, bn = true) {
+        function dLayer(name, inputLayer, numFilters, kernelSize = [4,4], bn = true) {
             let d = tf.layers.conv2d({
-                kernelSize: f_size,
-                filters: filters,
-                strides: 2,
-                padding: 'same'
-            }).apply(layer_input);
+                name: name + '_conv',
+                kernelSize: kernelSize,
+                filters: numFilters,
+                strides: [2,2],
+                padding: 'same',
+                kernelInitializer=this.cvInitializer
+            }).apply(inputLayer);
 
-            if (bn) d = tf.layers.batchNormalization({ momentum: 0.8 }).apply(d);
+            if (bn) d = tf.layers.batchNormalization({
+                name: name + '_bnorm',
+                axis: 3,
+                epsilon: 1e-5,
+                momentum: 0.1,
+                gammaInitializer=this.bnInitializer
+            }).apply(d);
 
-            d = tf.layers.leakyReLU({ alpha: 0.2 }).apply(d);
+            d = tf.layers.leakyReLU({
+                name: name + '_lrelu',
+                alpha: 0.2
+            }).apply(d);
 
             return d;
         }
 
-        const stride = 2;
-        const inputLayer = tf.input({ shape: this.patchShape });
-        // this.disFilters
+        // TODO - ADD NAMES
+        // const stride = 2;
+        const inputLayer = tf.input({name: 'D_input', shape: this.patchShape });
+        // this.dFilters
 
         const numConv = Math.floor(Math.log(this.outputShape[1] / Math.log(2)));
+        
         const filterList = [];
         for (let i = 0; i < numConv; i++) {
-            filterList.push(this.disFilters * Math.min(8, Math.pow(2, i)));
+            filterList.push(this.dFilters * Math.min(8, Math.pow(2, i)));
         }
 
         // CONV 1
-        let d = dLayer(inputLayer, this.disFilters, 4, false);
+        let d = dLayer('D1', inputLayer, this.dFilters, [4,4], false);
 
         // CONV 2 - CONV N
         for (let i = 1; i < filterList.length; i++) {
-            d = dLayer(d, filterList[i]);
+            d = dLayer('D'+i+1, d , filterList[i]);
         }
 
         // generate a list of inputs for the different patches to the network
         const inputList = [];
         for (let i = 0; i < this.numPatches; i++) {
-            inputList.push(tf.input({ shape: this.patchShape, name: 'patch_input_' + i }));
+            inputList.push(tf.input({ shape: this.patchShape, name: 'pD_input_' + i }));
         }
 
         // get an activation
         const xFlat = tf.layers.flatten().apply(d);
-        let xx = tf.layers.dense({ units: 2, activation: 'softmax', name: 'dis_dense' }).apply(xFlat);
+        let xx = tf.layers.dense({ units: 2, activation: 'softmax', name: 'D_dense' }).apply(xFlat);
 
         const patchGan = tf.model({ inputs: inputLayer, outputs: [xx, xFlat], name: 'patch_GAN' });
 
@@ -315,15 +379,14 @@ class TerraGAN {
         xMbd = MBD.apply(xMbd);
         x = tf.layers.concatenate(1).apply([x, xMbd]);
 
-        const xOut = tf.layers.dense({ units: 2, activation: 'softmax', name: 'disc_output' }).apply(x)
+        const xOut = tf.layers.dense({ units: 2, activation: 'softmax', name: 'D_output' }).apply(x)
         const discriminator = tf.model({ inputs: inputList, outputs: xOut, name: 'discriminator_nn' });
 
         return discriminator;
     }
 
-    //---------------------
-    // TRAINING
-    //---------------------
+// TRAINING
+//---------------------
 
     loadData(params) {
         this.dataLoader = new DataLoader(params);
@@ -340,37 +403,31 @@ class TerraGAN {
 
         const epochAvgStats = [];
 
-
-
-        // TODO - Finish this
-        
         for (let e = 1; e <= epochs; e++) {
             let avgStats = await this.trainEpoch(bpe, batchSize, [logOnEpoch, logOnBatch]);
 
             epochAvgStats.push(avgStats);
 
             if (e % saveOnEpoch === 0) {
-                let saveResults1 = await this.discriminator.save(savePath + '/model_dis');
-                let saveResults2 = await this.generator.save(savePath + '/model_gen_' + e);
-                let saveResults3 = await this.dcgan.save(savePath + '/model_gan');
-                console.log('MODEL SAVED TO: ' + savePath);
+                await this.saveModel(e);
             }
         }
-
-
-        // Add Other shit to do per epoch
+        // TODO Add Other shit to do per epoch
         // Print summary
         // Save file
     }
 
-    async saveModel(params) {
+    async saveModel(e = 0) {
 
-        // TODO - finish this
-        const e = (params.epoch !== undefined) params
-        // Saveing the Model
-        const fil = this.disFilters + this.genFilters + '_'
+        const fil = this.dFilters + this.genFilters + '_'
         const modelName = this.dataset.modelName + fil + modelTag
         const savePath = 'file://' + params.modelDirectory + '/node/' + modelName;
+
+        let saveResultsDis = await this.discriminator.save(savePath + '/model_dis');
+        let saveResultsGen = await this.generator.save(savePath + '/model_gen_' + e);
+        let saveResultsGan = await this.dcgan.save(savePath + '/model_gan');
+
+        console.log('MODEL SAVED TO: ' + savePath);
     }
 
     async trainEpoch(bpe, batchSize, log) {
@@ -535,11 +592,11 @@ class TerraGAN {
         return gLoss;
     }
 
-    // TESTING
-    //---------------------
+// TESTING
+//---------------------
 
-    // INFERENCE
-    //---------------------
+// INFERENCE
+//---------------------
 
     // TODO
     predict() {
@@ -547,8 +604,8 @@ class TerraGAN {
     }
 
 
-    // UTILS
-    //---------------------
+// UTILS
+//---------------------
 
     // TODO
     save() {
@@ -590,9 +647,8 @@ class TerraGAN {
         this.dcgan.summary();
     }
 
-    // DEPRICATED
-    //---------------------
-
+// DEPRICATED
+//---------------------
     _buildDiscriminator() {
 
         // def d_layer(layer_input, filters, f_size = 4, bn = True):
@@ -638,10 +694,10 @@ class TerraGAN {
         // d3 = d_layer(d2, self.df * 4)
         // d4 = d_layer(d3, self.df * 8)
 
-        const d1 = dLayer(combinedImgs, this.disFilters);
-        const d2 = dLayer(d1, this.disFilters * 2);
-        const d3 = dLayer(d2, this.disFilters * 4);
-        const d4 = dLayer(d3, this.disFilters * 8);
+        const d1 = dLayer(combinedImgs, this.dFilters);
+        const d2 = dLayer(d1, this.dFilters * 2);
+        const d3 = dLayer(d2, this.dFilters * 4);
+        const d4 = dLayer(d3, this.dFilters * 8);
 
         // validity = Conv2D(1, kernel_size = 4, strides = 1, padding = 'same')(d4)
         const output = tf.layers.conv2d({

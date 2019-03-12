@@ -1,10 +1,14 @@
+
+
 import TerraGAN
 
 # Model and Dataset Directory
 datasetDir = '../terra-datasets/temp'
-modelDir = '../terra-models/temp'
+modelTempDir = '../terra-models/temp'
+# modelExportDir = '../terra-models/public'
 
-# ??-MAIN TEST-------------------------------------------------------------------------
+
+# ??-MAIN TEST LOOP-----
 
 
 terraGAN = TerraGAN(
@@ -29,17 +33,26 @@ terraGAN.loadData(
     dataType = '.png'
 )
 
-terraGAN.train({
-    modelTag: 'trial1',
-    modelDirectory: modelDir,
-    epochs: 800,
-    batchesPerEpoch: 100,
-    batchSize: [1, 1],
-    logOnBatch: true,
-    logOnEpoch: true,
-    saveOnEpoch: 10
-});
+terraGAN.train(
+    modelTag = 'trial1',
+    modelDirectory = modelTempDir,
+    epochs = 800,
+    batchesPerEpoch = 100,
+    batchSize = [1, 1],
+    logOnBatch = True,
+    logOnEpoch = True,
+    saveOnEpoch = 10
+)
+
+terraGAN.test(
+    datasetDirectory=datasetDir,
+    dataset = 'train'
+)
+
+# terraGAN.export(
+#     modelDirectory=modelExportDir,
+# )
 
 
-# ??-MAIN TEST-------------------------------------------------------------------------
+# ??-MAIN TEST LOOP-----
 
