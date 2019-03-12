@@ -17,6 +17,7 @@
   },
   "homepage": "https://github.com/noahpitts/terra-gan#readme",
   "dependencies": {
-    "@tensorflow/tfjs": "^1.0.0"
+    "@tensorflow/tfjs": "^1.0.0",
+    "jimp": "^0.6.0"
   }
 }
