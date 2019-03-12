@@ -17,10 +17,14 @@ Custom Desktop
 Windows 10 x86-64
 
 
-## Dependancies
+## Software Dependancies
 Python 3.6.8
 Cuda 10.0.130 ---<>
 cuDNN 7.5.0.56 ---<>
+graphviz-2.38 - https://graphviz.gitlab.io/_pages/Download/Download_windows.html
 
-
-
+## Python Pip Dependancies
+tensorflow-gpu          r1.13
+h5py                    2.9.0
+pydot                   1.4.1
+keras                   2.2.4
