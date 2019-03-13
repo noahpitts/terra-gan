@@ -3,7 +3,7 @@ const Jimp = require('jimp');
 
 // Terra GAN Model Builder
 class TerraGAN {
-    constructor(buildArch, params) {
+    constructor(params, buildArch=true) {
         this.initializeParams(params);
         if (buildArch) this.buildArch(true);
     }
@@ -22,12 +22,12 @@ class TerraGAN {
             outputHeight: 256,
             outputWidth: 256,
             outputChannels: 1,
-            patchDim: [64, 64],
+            patchDim: [256, 256],
             gFilters: 32,
             dFilters: 32,
             UNET: true,
             gFilterConvMult: [0, 1, 2, 4, 8, 8, 8, 8, 8],
-            gFilterDeconvMult: [0, 8, 8, 8, 8, 4, 2, 0],
+            gFilterDeconvMult: [0, 8, 8, 8, 8, 4, 2, 1],
             learningRate: 1E-4,
             beta1: 0.9,
             beta2: 0.999,
@@ -57,7 +57,7 @@ class TerraGAN {
         this.UNET = true;
         this.gFilters = (params.gFilters !== undefined) ? params.gFilters : defaultParams.gFilters;
         this.gFilterConvMult = (params.gFilterConvMult !== undefined) ? params.gFilterConvMult : defaultParams.gFilterConvMult;
-        this.gFilterDeconvMult = (params.gFilterDeconvMult !== undefined) ? defaultParams.gFilterDeconvMult : params.gFilterDeconvMult;
+        this.gFilterDeconvMult = (params.gFilterDeconvMult !== undefined) ? defaultParams.gFilterDeconvMult : defaultParams.gFilterDeconvMult;
         this.dFilters = (params.dFilters !== undefined) ? params.dFilters : defaultParams.dFilters;
 
         // Discriminator Patches [rows, cols]
@@ -77,9 +77,10 @@ class TerraGAN {
 
         // Define Initializers
         // ------------------------
+        // TODO - FIX THIS FOR PARAM CONTROL
         this.randomSeed = (params.randsomSeed !== undefined) ? params.randsomSeed : defaultParams.randsomSeed;
-        this.convInitializer = tf.initializers.randomNormal(0.0, 0.02, this.randomSeed);
-        this.bnormInitializer = tf.initializers.randomNormal(1.0, 0.02, this.randomSeed);
+        this.convInitializer = tf.initializers.randomNormal({mean: 0.0, stddev: 0.02});
+        this.bnormInitializer = tf.initializers.randomNormal({mean: 1.0, stddev: 0.02});
 
     }
 
@@ -98,7 +99,7 @@ class TerraGAN {
         // Build and Compile DCGAN
         // ----------------------
         this.dcgan = this.buildDCGAN();
-        this.dcgan.compile({ optimizer: this.adamGAN, loss: ['meanAbsoluteError', 'binaryCrossentropy'], lossWeights: [1E2, 1] })
+        this.dcgan.compile({ optimizer: this.gOptimizer, loss: ['meanAbsoluteError', 'binaryCrossentropy'], lossWeights: [1E2, 1] })
 
         // Log Model Summary
         // ----------------------
@@ -106,7 +107,6 @@ class TerraGAN {
     }
 
     buildDCGAN() {
-        // TODO - Comment
         const genInput = tf.input({ shape: this.inputShape, name: 'DCGAN_input' });
         const genOutput = this.generator.apply(genInput);
 
@@ -129,6 +129,7 @@ class TerraGAN {
         const genPatchList = [];
         for (let rowIndex of rowIndexList) {
             for (let colIndex of colIndexList) {
+                // TODO - Update Slice when tfjs reslease support for Lambda Layers
                 let SLC = new Slice({ slice: [rowIndex, colIndex, ph, pw] });
                 let xPatch = SLC.apply(genOutput);
                 genPatchList.push(xPatch);
@@ -138,22 +139,15 @@ class TerraGAN {
         // measure loss from patches of the image (not the actual image)
         const dcganOutput = this.discriminator.apply(genPatchList);
 
-        // actually turn into keras model
-        const DCGAN = tf.model({ inputs: genInput, outputs: [genOutput, dcganOutput], name: 'DCGAN' });
-
-        return DCGAN;
+        // DCGAN Model
+        return tf.model({name: 'DCGAN_model', inputs: genInput, outputs: [genOutput, dcganOutput] });
     }
 
     buildGenerator() {
-        const UNET = true;
         // UNET Generator 
         // [https://arxiv.org/pdf/1611.07004v1.pdf][5. Appendix]
 
-        // Generator does the following:
-        // 1. Takes in an image
-        // 2. Generates an image from this image
-
-        // Convolution-BatchNorm-ReLU layer with k ﬁlters.
+        // Convolution-BatchNorm-ReLU layer with k ﬁlters
         function convLayer(name, inputLayer, numFilters, kernelSize = [4, 4], bn = true) {
 
             // Convolutional Layer
@@ -163,7 +157,8 @@ class TerraGAN {
                 kernelSize: kernelSize,
                 strides: [2, 2],
                 padding: 'same',
-                kernelInitializer=this.convInitializer
+                kernelInitializer: tf.initializers.randomNormal({mean: 0.0, stddev: 0.02})
+                
             }).apply(inputLayer);
 
             // Batch Normalization Layer
@@ -172,7 +167,7 @@ class TerraGAN {
                 axis: 3,
                 epsilon: 1e-5,
                 momentum: 0.1,
-                gammaInitializer=this.bnormInitializer
+                gammaInitializer: tf.initializers.randomNormal({mean: 1.0, stddev: 0.02})
             }).apply(c);
 
             // Leaky ReLU Layer
@@ -185,7 +180,7 @@ class TerraGAN {
         }
 
         // Convolution-BatchNorm-Dropout-ReLUlayer with a dropout rate of 50%
-        function deconvLayer(name, inputLayer, skipLayer, numFilters, kernelSize = [4, 4], dropout_rate = 0.5) {
+        function deconvLayer(name, inputLayer, skipLayer, numFilters, dropout_rate = 0.5, kernelSize = [4, 4]) {
             // Upsampling Layer
             let d = tf.layers.upSampling2d({
                 name: name + '_upsample',
@@ -199,7 +194,7 @@ class TerraGAN {
                 kernelSize: kernelSize,
                 strides: [1, 1],
                 padding: 'same',
-                kernelInitializer=this.convInitializer
+                kernelInitializer: tf.initializers.randomNormal({mean: 0.0, stddev: 0.02})
             }).apply(d);
 
             // Batch Normalization Layer
@@ -208,7 +203,7 @@ class TerraGAN {
                 axis: 3,
                 epsilon: 1e-5,
                 momentum: 0.1,
-                gammaInitializer=this.bnormInitializer
+                gammaInitializer: tf.initializers.randomNormal({mean: 1.0, stddev: 0.02})
             }).apply(d);
 
             // Dropout Layer
@@ -218,7 +213,8 @@ class TerraGAN {
             }).apply(d);
 
             // Concatination (skip connections) Layer
-            if (this.UNET) d = tf.layers.concatenate({
+            // if (this.UNET) 
+            d = tf.layers.concatenate({
                 name: name + '_unet',
                 axis: 3
             }).apply([d, skipLayer]);
@@ -238,16 +234,16 @@ class TerraGAN {
         // -------------------------------
 
         // Image input
-        const input = tf.input({ shape: this.inputShape, name: 'G_input' });
+        const inputLayer = tf.input({ shape: this.inputShape, name: 'G_input' });
 
-        const c1 = convLayer('G1c', input, this.gFilters, [4, 4], false);     // default: C64
-        const c2 = convLayer('G2c', c1, this.gFilters * 2);                  // default: C128
-        const c3 = convLayer('G3c', c2, this.gFilters * 4);                  // default: C256
-        const c4 = convLayer('G4c', c3, this.gFilters * 8);                  // default: C512
-        const c5 = convLayer('G5c', c4, this.gFilters * 8);                  // default: C512
-        const c6 = convLayer('G6c', c5, this.gFilters * 8);                  // default: C512
-        const c7 = convLayer('G7c', c6, this.gFilters * 8);                  // default: C512
-        const c8 = convLayer('G8c', c7, this.gFilters * 8);                  // default: C512
+        const c1 = convLayer('G1c', inputLayer, this.gFilters * this.gFilterConvMult[1], [4, 4], false);     // default: C64
+        const c2 = convLayer('G2c', c1, this.gFilters * this.gFilterConvMult[2]);                  // default: C128
+        const c3 = convLayer('G3c', c2, this.gFilters * this.gFilterConvMult[3]);                  // default: C256
+        const c4 = convLayer('G4c', c3, this.gFilters * this.gFilterConvMult[4]);                  // default: C512
+        const c5 = convLayer('G5c', c4, this.gFilters * this.gFilterConvMult[5]);                  // default: C512
+        const c6 = convLayer('G6c', c5, this.gFilters * this.gFilterConvMult[6]);                  // default: C512
+        const c7 = convLayer('G7c', c6, this.gFilters * this.gFilterConvMult[7]);                  // default: C512
+        const c8 = convLayer('G8c', c7, this.gFilters * this.gFilterConvMult[8]);                  // default: C512
 
         //-------------------------------
         // DECODER
@@ -256,38 +252,32 @@ class TerraGAN {
         // also adds skip connections (Concatenate). Takes input from previous layer matching encoder layer
         //-------------------------------
 
-        const d1 = deconvLayer('G1d', c8, c7, this.gFilters * 8);                     // default: C512
-        const d2 = deconvLayer('G2d', d1, c6, this.gFilters * 8);                     // default: C512
-        const d3 = deconvLayer('G3d', d2, c5, this.gFilters * 8);                     // default: C512
-        const d4 = deconvLayer('G4d', d3, c4, this.gFilters * 8, dropout = false);      // default: C512
-        const d5 = deconvLayer('G5d', d4, c3, this.gFilters * 4, dropout = false);      // default: C256
-        const d6 = deconvLayer('G6d', d5, c2, this.gFilters * 2, dropout = false);      // default: C128
-        const d7 = deconvLayer('G7d', d6, c1, this.gFilters * 0, dropout = false);      // default: C64
+        const d1 = deconvLayer('G1d', c8, c7, this.gFilters * this.gFilterDeconvMult[1]);                     // default: C512
+        const d2 = deconvLayer('G2d', d1, c6, this.gFilters * this.gFilterDeconvMult[2]);                     // default: C512
+        const d3 = deconvLayer('G3d', d2, c5, this.gFilters * this.gFilterDeconvMult[3]);                     // default: C512
+        const d4 = deconvLayer('G4d', d3, c4, this.gFilters * this.gFilterDeconvMult[4], false);      // default: C512
+        const d5 = deconvLayer('G5d', d4, c3, this.gFilters * this.gFilterDeconvMult[5], false);      // default: C256
+        const d6 = deconvLayer('G6d', d5, c2, this.gFilters * this.gFilterDeconvMult[6], false);      // default: C128
+        const d7 = deconvLayer('G7d', d6, c1, this.gFilters * this.gFilterDeconvMult[7], false);      // default: C64
 
-        // ?? Why no C128 Layer Here
-
-        // After the last layer in the decoder, a convolution is applied
-        // to map to the number of output channels (3 in general,
-        // except in colorization, where it is 2), followed by a Tanh
-        // function.
         const d8 = tf.layers.upSampling2d({
             name: 'G8d_upsample',
             size: [2, 2]
         }).apply(d7);
 
 
-        const output = tf.layers.conv2d({
-            name: 'unet_output',
-            kernelSize: 4,
+        const outputLayer = tf.layers.conv2d({
+            name: 'G_output',
+            kernelSize: [4,4],
             filters: this.outputChannels,
             strides: [1, 1],
             activation: 'tanh',
             padding: 'same',
-            kernelInitializer=this.cvInitializer
+            kernelInitializer: tf.initializers.randomNormal({mean: 0.0, stddev: 0.02})
         }).apply(d8);
 
         // return Model(input, output)
-        return tf.model({ inputs: input, outputs: output });
+        return tf.model({name: 'G_model', inputs: inputLayer, outputs: outputLayer });
     }
 
     buildDiscriminator() {
@@ -305,7 +295,7 @@ class TerraGAN {
                 filters: numFilters,
                 strides: [2, 2],
                 padding: 'same',
-                kernelInitializer=this.cvInitializer
+                kernelInitializer: tf.initializers.randomNormal({mean: 0.0, stddev: 0.02})
             }).apply(inputLayer);
 
             if (bn) d = tf.layers.batchNormalization({
@@ -313,7 +303,7 @@ class TerraGAN {
                 axis: 3,
                 epsilon: 1e-5,
                 momentum: 0.1,
-                gammaInitializer=this.bnInitializer
+                gammaInitializer: tf.initializers.randomNormal({mean: 1.0, stddev: 0.02})
             }).apply(d);
 
             d = tf.layers.leakyReLU({
@@ -324,13 +314,10 @@ class TerraGAN {
             return d;
         }
 
-        // TODO - ADD NAMES
-        // const stride = 2;
+        //  INPUT LAYER
         const inputLayer = tf.input({ name: 'D_input', shape: this.patchShape });
-        // this.dFilters
 
         const numConv = Math.floor(Math.log(this.outputShape[1] / Math.log(2)));
-
         const filterList = [];
         for (let i = 0; i < numConv; i++) {
             filterList.push(this.dFilters * Math.min(8, Math.pow(2, i)));
@@ -384,12 +371,13 @@ class TerraGAN {
 
         xMbd = tf.layers.reshape({ targetShape: [num_kernels, dim_per_kernel] }).apply(xMbd);
 
+        // TODO - Replace MiniBatchDisc with a Lambda Layer in tfjs once implemented
         const MBD = new MiniBatchDisc({ name: 'mini_batch_discriminator' });
         xMbd = MBD.apply(xMbd);
         x = tf.layers.concatenate(1).apply([x, xMbd]);
 
-        const xOut = tf.layers.dense({ units: 2, activation: 'softmax', name: 'D_output' }).apply(x)
-        const discriminator = tf.model({ inputs: inputList, outputs: xOut, name: 'discriminator_nn' });
+        x = tf.layers.dense({ units: 2, activation: 'softmax', name: 'D_output' }).apply(x)
+        const discriminator = tf.model({ name: 'D_model', inputs: inputList, outputs: x });
 
         return discriminator;
     }
@@ -947,13 +935,13 @@ class DataLoader {
         const loc = this.location + '_';
         const size = this.height + 'x' + this.width + '_';
         const scale = this.scale + '_';
-        const inputChannels = '';
+        let inputChannels = '';
 
-        for (let ich of this.dataset.channels[0]) {
+        for (let ich of this.channels[0]) {
             inputChannels = inputChannels + ich + '_';
         }
-        const outputChannels = '';
-        for (let och of this.dataset.channels[1]) {
+        let outputChannels = '';
+        for (let och of this.channels[1]) {
             outputChannels = outputChannels + och + '_';
         }
         this.modelName = loc + size + scale + inputChannels + 'to_' + outputChannels
@@ -1118,3 +1106,7 @@ class Slice extends tf.layers.Layer {
 // Regsiter the custom layer, so TensorFlow.js knows what class constructor to call when deserializing an saved instance of the custom layer.
 tf.serialization.registerClass(MiniBatchDisc);
 tf.serialization.registerClass(Slice);
+
+
+// terraGAN = new TerraGAN({});
+module.exports = { TerraGAN, DataLoader };

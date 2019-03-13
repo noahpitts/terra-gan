@@ -16,7 +16,7 @@
             "name": "Node: Launch Program",
             "type": "node",
             "request": "launch",
-            "program": "${workspaceFolder}/node/index.js",
+            "program": "${workspaceFolder}/javascript/TerraGAN.js",
             "console": "integratedTerminal"
         }
     ]

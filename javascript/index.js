@@ -1,6 +1,6 @@
-require('./TerraGAN.js');
+const { TerraGAN, DataLoader } = require('./TerraGAN.js');
 
-const datasetDir = '../terra-datasets/temp'
+const datasetDir = '../terra-datasets/public'
 const modelTempDir = '../terra-models/temp'
 // const modelExportDir = '../terra-models/public'
 
@@ -8,13 +8,8 @@ const modelTempDir = '../terra-models/temp'
 
 
 const terraGAN = new TerraGAN({
-    inputShape: [256, 256, 1],
-    outputShape: [256, 256, 1],
-    patchDim: [64, 64],
-    genFilters: 32,
-    disFilters: 32,
-    loadData: false,
-    summary: true,
+    dFilters: 32,
+    gFilters: 32
 });
 
 terraGAN.loadData({
@@ -24,7 +19,7 @@ terraGAN.loadData({
     height: 256,
     scale: 8,
     dataset: 'train',
-    channels: [['topo'], ['grid_8_bin']],
+    channels: [['topo'], ['grid8bin']],
     numSamples: 1000,
     dataType: '.png'
 });
@@ -34,7 +29,7 @@ terraGAN.train({
     modelDirectory: modelTempDir,
     epochs: 800,
     batchesPerEpoch: 100,
-    batchSize: [1, 1],
+    batchSize: [2, 2],
     logOnBatch: true,
     logOnEpoch: true,
     saveOnEpoch: 10
