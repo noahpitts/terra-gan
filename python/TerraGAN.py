@@ -601,7 +601,7 @@ terraGAN = TerraGAN(
     outputHeight = 256, 
     outputWidth = 256, 
     outputChannels = 1, 
-    patchDim = [64, 64], 
+    patchDim = [256, 256], 
     gFilters = 64, 
     dFilters = 64, 
     UNET = True, 
@@ -627,14 +627,14 @@ terraGAN.loadData(DataLoader(
 ))
 
 terraGAN.train(
-    epochs=50, 
-    batchesPerEpoch=32, 
-    batchSize=(64, 64), 
+    epochs=80, 
+    batchesPerEpoch=1000, 
+    batchSize=(1, 1), 
     logBatch=False, 
     logEpoch=True, 
     saveOnEpoch=10, 
     modelDir=modelTempDir, 
-    modelTag='test1'
+    modelTag='test2'
 
 )
 
