@@ -1,20 +1,94 @@
+import os
+import time
+import random
+import PIL as p
+
 import keras.layers as kl           # Keras Layers
 import keras.models as km           # Keras Models
 import keras.initializers as ki     # Keras Initializers
 import keras.optimizers as ko       # Keras Optimizers
 import keras.backend as K           # Keras Backend
+
+import keras.utils as ku
+
 import numpy as np                  # Numpy
 
-
 class DataLoader:
-    def __init__(self, params):
-        # TODO ----------------
-        x = 2
+    def __init__(self, datasetDir, location='yosemite', width=256, height=256, scale=8, dataset='train', channels=(['grid8bin'], ['topo']), numSamples=400, dataType='.png'):
+        
+        self.datasetPath = datasetDir + '/' + location + '/' + str(height) + 'x' + str(width) + '/' + str(scale) + '/' + dataset + '/'
+
+        self.numChannelsA = len(channels[0])
+        self.numChannelsB = len(channels[1])
+
+        self.imagesA = []
+        self.imagesB = []
+
+        start = time.time()
+
+        for i in range(1, numSamples + 1):
+            # Images A
+            imageA = []
+            for a in channels[0]:
+                imageAChannelPath = self.datasetPath + a + '/' + str(i) + dataType
+                imageAChannel = p.Image.open(imageAChannelPath)
+                # TODO consider the case for multiband image data
+                # imageAChannel = np.asarray()
+                # imageAChannel = np.reshape(imageAChannel, (height, width))
+                imageA.append(imageAChannel.getdata())
+
+            imageA = np.asarray(imageA)
+            imageA = np.reshape(imageA, (len(channels[0]), height, width))
+            imageA = np.transpose(imageA, (1, 2, 0)) # Channels Last Format
+            self.imagesA.append(imageA)
+
+            # Images B
+            imageB = []
+            for b in channels[1]:
+                imageBChannelPath = self.datasetPath + b + '/' + str(i) + dataType
+                imageBChannel = p.Image.open(imageBChannelPath)
+                imageB.append(imageBChannel.getdata())
+
+            imageB = np.asarray(imageB)
+            imageB = np.reshape(imageB, (len(channels[1]), height, width))
+            imageB = np.transpose(imageB, (1, 2, 0)) # Channels Last Format
+            self.imagesB.append(imageB)
+
+        print('Data Loaded in %ds' % (time.time() - start))
+        # Create Model Name String (Used when saving the Model on training)
+        loc = location + '_'
+        size = str(height) + 'x' + str(width) + '_'
+        scale = str(scale) + '_'
+        inputChannels = ''
+
+        for ich in channels[0]:
+            inputChannels = inputChannels + ich + '_'
+
+        outputChannels = ''
+        for och in channels[1]:
+            outputChannels = outputChannels + och + '_'
+        
+        self.modelName = loc + size + scale + inputChannels + 'to_' + outputChannels
+
+    def loadBatch(self, batchSize):
+        
+        batchA = []
+        batchB = []
+        for i in range(0, batchSize):
+            batchA.append(random.choice(self.imagesA))
+            batchB.append(random.choice(self.imagesB))
+
+        batchA = (np.asarray(batchA, dtype=np.float32) / 127.5) - 1.0       # normalized np.array for Truth
+        batchB = (np.asarray(batchB, dtype=np.float32) / 127.5) - 1.0         # normalized np.array for Rep
+        return {
+            'A': batchA,
+            'B': batchB
+        }
 
 
 class TerraGAN:
     
-    def __init__(self, buildArch=True, inputHeight = 256, inputWidth = 256, inputChannels = 1, outputHeight = 256, outputWidth = 256, outputChannels = 1, patchDim = [256, 256], gFilters = 32, dFilters = 32, UNET = True, gFilterConvMult = [0, 1, 2, 4, 8, 8, 8, 8, 8], gFilterDeconvMult = [0, 8, 8, 8, 8, 4, 2, 1], learningRate = 1E-4, beta1 = 0.9, beta2 = 0.999, epsilon = 1e-08, randomSeed = 2019, dataLoader = False):
+    def __init__(self, summary=False, GPU=2, inputHeight = 256, inputWidth = 256, inputChannels = 1, outputHeight = 256, outputWidth = 256, outputChannels = 1, patchDim = [256, 256], gFilters = 32, dFilters = 32, UNET = True, gFilterConvMult = [0, 1, 2, 4, 8, 8, 8, 8, 8], gFilterDeconvMult = [0, 8, 8, 8, 8, 4, 2, 1], learningRate = 1E-4, beta1 = 0.9, beta2 = 0.999, epsilon = 1e-08, randomSeed = 2019, dataLoader = False):
 
         # Initialize the Model Architecture Parameters
         # --------------------------
@@ -23,7 +97,9 @@ class TerraGAN:
         # Build the Model Architecture
         # --------------------------
         # if (buildArch) 
-        self.buildArch(summary=True)
+        self.buildArch(summary, GPU)
+
+        self.dataLoader = dataLoader
 
     # BUILD MODEL
     # --------------------------
@@ -72,25 +148,29 @@ class TerraGAN:
         self.convInitializer = ki.RandomNormal(0.0, 0.02, self.randomSeed)
         self.bnormInitializer = ki.RandomNormal(1.0, 0.02, self.randomSeed)
 
-    def buildArch(self, summary=False):
+    def buildArch(self, summary, GPU):
+        self.GPU = GPU
         # Build and Compile Discriminator
         # ----------------------
         self.discriminator = self.buildDiscriminator()
+        if self.GPU > 1: self.discriminator = ku.multi_gpu_model(self.discriminator, gpus=self.GPU)
         self.discriminator.compile(self.dOptimizer, loss='binary_crossentropy')
         self.discriminator.trainable = False
-        self.discriminator.summary()
+        if summary: self.discriminator.summary()
 
         # Build and Compile Generator
         # ----------------------
         self.generator = self.buildGenerator()
+        if self.GPU > 1: self.generator = ku.multi_gpu_model(self.generator, gpus=self.GPU)
         self.generator.compile( self.dOptimizer, loss='mean_absolute_error' )
-        self.generator.summary()
+        if summary: self.generator.summary()
 
         # Build and Compile DCGAN
         # ----------------------
         self.dcgan = self.buildDCGAN()
+        if self.GPU > 1: self.dcgan = ku.multi_gpu_model(self.dcgan, gpus=self.GPU)
         self.dcgan.compile(self.gOptimizer, loss=['mean_absolute_error', 'binary_crossentropy'], loss_weights=[1E2, 1])
-        self.dcgan.summary()
+        if summary: self.dcgan.summary()
 
         # Log Model Summary
         # ----------------------
@@ -235,12 +315,12 @@ class TerraGAN:
         return km.Model(inputs=[inputLayer], outputs=[outputLayer])
 
     def buildDiscriminator(self): #?? READY TO TEST
-    #  -------------------------------
-     #  DISCRIMINATOR
-     #  C64-C128-C256-C512-C512-C512 (for 256x256)
-     #  otherwise, it scales from 64
-     #  1 layer block = Conv - BN - LeakyRelu
-     #  -------------------------------
+        #  -------------------------------
+        #  DISCRIMINATOR
+        #  C64-C128-C256-C512-C512-C512 (for 256x256)
+        #  otherwise, it scales from 64
+        #  1 layer block = Conv - BN - LeakyRelu
+        #  -------------------------------
         def dLayer(name, inputLayer, numFilters=32, kernelSize=4, batchNorm=True):
             d = kl.Conv2D(numFilters, kernelSize, 
                 name=name + '_conv', 
@@ -329,31 +409,139 @@ class TerraGAN:
 
     # TRAINING
     # --------------------------
-
-    def loadData(self):
+    def loadData(self, dataLoader):
         # TODO ----------------
-        x = 2
+        self.dataLoader = dataLoader
 
-    def train(self):
-        # TODO ----------------
-        x = 2
+    def train(self, epochs=100, batchesPerEpoch=10, batchSize=(1,1), logBatch=True, logEpoch=True, saveOnEpoch=10, modelDir=None, modelTag=''):
 
-    def trainEpoch(self):
-        # TODO ----------------
-        x = 2
+        self.batchCounter = 0
+        self.modelDirectory = modelDir
+        self.modelTag = modelTag
 
-    def trainBatch(self):
-        # TODO ----------------
-        x = 2
+        trainStart = time.time()
 
-    def trainDisriminator(self):
-        # TODO ----------------
-        x = 2
+        epochAvgStats = []
+        for e in range(1, epochs + 1):
+            avgStats = self.trainEpoch(batchesPerEpoch, batchSize, (logEpoch, logBatch))
+            epochAvgStats.append(avgStats)
 
-    def trainGenerator(self):
-        # TODO ----------------
-        x = 2
+            if e % saveOnEpoch == 0: self.saveModel(e)
+
+        trainTime = time.time() - trainStart
+        print('Training took %d s' % (trainTime))
+
+    def trainEpoch(self, bpe, batchSize, log):
+        startTime = time.time()
+        # TODO ,,,,,,,progbar = kerasUtils.Progbar(batchesPerEpoch)
+
+        epochStats = []
+        for b in range(1, bpe + 1):
+            loss  = self.trainBatch(batchSize[0], batchSize[1], log[1])
+            epochStats.append(loss)
+
+        # TODO - AVG LOSS PER EPOCH STATS
+        epochTime = time.time() - startTime
+        if (log[0]): print('EPOCH FINISHED IN %d... TODO: Implement Epoch Avg Stats' % (epochTime))
+
+        if log[0]: print(self.lossStr(epochStats[-1]))
+        return epochStats[-1]
+
+    def trainBatch(self, discBatchSize, genBatchSize, logBatchStats):
+        # Train the discriminator on the Batch and return the Loss
+        discLoss = self.trainDisBatch(discBatchSize)
+
+        # Train the discriminator on the Batch and return the Loss
+        genLoss = self.trainGenBatch(genBatchSize)
+
+        # Increment the batch Counter
+        self.batchCounter += 1
+
+        loss = (discLoss, min(genLoss[0].tolist(), 1000000), min(genLoss[1].tolist(), 1000000), min(genLoss[2].tolist(), 1000000))
+        if logBatchStats: print(self.lossStr(loss))
         
+        return loss
+
+    def trainDisBatch(self, batchSize, smooth=False, flip=0):
+        # generate a batch of data and feed to the discriminator
+        # some images that come out of here are real and some are fake
+
+        # Get the shape of the Input/Output Data
+        shapeA = (batchSize, self.inputHeight, self.inputWidth, self.inputChannels)
+        shapeB = (batchSize, self.outputHeight, self.outputWidth, self.outputChannels)
+
+        # Create a batch to train the Discriminator
+        batch = self.dataLoader.loadBatch(batchSize)
+
+        # Discriminator Input 4D Tensors
+        inputA = batch['A']    # Truth
+        assert (inputA.shape == shapeA)
+        inputB = batch['B']    # Representation
+        assert (inputB.shape == shapeB)
+
+        if self.batchCounter % 2 == 0:
+            # generate fake image
+            inputD = self.generator.predict_on_batch(inputB)
+            # each image will produce a 1x2 vector for the results (aka is fake or not)
+            result = np.zeros((inputD.shape[0], 2), dtype=np.uint8)
+            result[:, 0] = 1
+
+        else:
+            # generate real image
+            inputD = inputA
+            result = np.zeros((inputD.shape[0], 2), dtype=np.uint8)
+
+            if smooth:
+                result[:, 1] = np.random.uniform(low=0.9, high=1, size=result.shape[0])
+            else:
+                result[:, 1] = 1
+
+        if flip > 0:
+            p = np.random.binomial(1, flip)
+            if p > 0:
+                result[:, [0, 1]] = result[:, [1, 0]]
+
+        # Extract Patches
+        ySpots = range(0, self.outputHeight, self.patchDim[0])
+        xSpots = range(0, self.outputWidth, self.patchDim[1])
+        patches = []
+
+        for y in ySpots:
+            for x in xSpots:
+                patch = inputD[:, y: y+self.patchDim[0], x: x+self.patchDim[1], :]
+                patches.append(np.asarray(patch, dtype=np.float32))
+
+        dLoss = self.discriminator.train_on_batch(patches, result)
+
+        return dLoss
+
+    def trainGenBatch(self, batchSize):
+        # Get the shape of the Input/Output Data
+        shapeA = (batchSize, self.inputHeight, self.inputWidth, self.inputChannels)
+        shapeB = (batchSize, self.outputHeight, self.outputWidth, self.outputChannels)
+
+        # Create a batch to train the Generator
+        batch = self.dataLoader.loadBatch(batchSize)
+
+        # Generator Input 4D Tensors
+        genInputA = batch['A']    # Truth
+        assert (genInputA.shape == shapeA)
+
+        genInputB = batch['B']    # Representation
+        assert (genInputB.shape == shapeB)
+
+        genResult = np.zeros((batchSize, 2), dtype=np.uint8)
+        genResult[:, 1] = 1
+
+        # Freeze the discriminator
+        # this.discriminator.trainable = false;
+
+        gLoss = self.dcgan.train_on_batch(genInputB, [genInputA, genResult])
+
+        # Unfreeze the discriminator
+        # this.discriminator.trainable = true;
+        return gLoss
+
 
     # TESTING
     # --------------------------
@@ -363,19 +551,91 @@ class TerraGAN:
 
     # UTILS
     # --------------------------
+    def lossStr(self, loss):
+        # TODO - Make a better string
+        return '[D logloss: ' + str(loss[0]) + '] [G total: ' + str(loss[1]) + ' L1 (mae): ' + str(loss[2]) + ' logloss: ' + str(loss[3]) + ']'
+
     def summary(self):
         # TODO ----------------
         x = 2
 
-    def saveModel(self):
+    def saveModel(self, epoch):
+        fil = str(self.dFilters) + str(self.gFilters) + '_'
+        modelName = self.dataLoader.modelName + fil + self.modelTag
+        savePath = self.modelDirectory + '/keras/' + modelName
+
+        disWeightsPath = os.path.join((savePath + '/dis_e%s.h5') % (epoch))
+        self.discriminator.save(disWeightsPath, overwrite=True)
+
+        genWeightsPath = os.path.join((savePath + '/gen_e%s.h5') % (epoch))
+        self.generator.save(genWeightsPath, overwrite=True)
+
+        dcganWeightsPath = os.path.join((savePath + '/dcgan_e%s.h5') % (epoch))
+        self.dcgan.save(dcganWeightsPath, overwrite=True)
+
+        print('MODEL SAVED TO: ' + savePath)
+
+    def exportModel(self):
         # TODO ----------------
         x = 2
 
-    def exportModel(self):
+    def loadModel(self):
         # TODO ----------------
         x = 2
 
     # DEPRICATED
     # --------------------------
 
-terraGAN = TerraGAN()
+
+
+#?? TEST 1 ------------------------------------
+datasetDir = '../terra-datasets/public'
+modelTempDir = '../terra-models/temp'
+
+terraGAN = TerraGAN(
+    summary=False,
+    GPU=2,
+    inputHeight = 256, 
+    inputWidth = 256, 
+    inputChannels = 1, 
+    outputHeight = 256, 
+    outputWidth = 256, 
+    outputChannels = 1, 
+    patchDim = [64, 64], 
+    gFilters = 64, 
+    dFilters = 64, 
+    UNET = True, 
+    gFilterConvMult = [0, 1, 2, 4, 8, 8, 8, 8, 8], 
+    gFilterDeconvMult = [0, 8, 8, 8, 8, 4, 2, 1], 
+    learningRate = 1E-4, 
+    beta1 = 0.9, 
+    beta2 = 0.999, 
+    epsilon = 1e-08, 
+    randomSeed = 2019, 
+    dataLoader = False)
+
+terraGAN.loadData(DataLoader(
+    datasetDir, 
+    location = 'yosemite', 
+    width = 256, 
+    height = 256, 
+    scale = 8, 
+    dataset = 'train', 
+    channels = (['grid8bin'], ['topo']), 
+    numSamples = 1000, 
+    dataType = '.png'
+))
+
+terraGAN.train(
+    epochs=50, 
+    batchesPerEpoch=32, 
+    batchSize=(64, 64), 
+    logBatch=False, 
+    logEpoch=True, 
+    saveOnEpoch=10, 
+    modelDir=modelTempDir, 
+    modelTag='test1'
+
+)
+
+#?? TEST 1 ------------------------------------

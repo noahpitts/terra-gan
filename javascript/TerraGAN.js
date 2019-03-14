@@ -419,7 +419,7 @@ class TerraGAN {
     async saveModel(e = 0) {
 
         const fil = this.dFilters + this.gFilters + '_'
-        const modelName = this.dataset.modelName + fil + modelTag
+        const modelName = this.modelName + fil + this.modelTag
         const savePath = 'file://' + params.modelDirectory + '/node/' + modelName;
 
         let saveResultsDis = await this.discriminator.save(savePath + '/model_dis');
@@ -459,7 +459,7 @@ class TerraGAN {
         let discLoss, genLoss;
 
         // Train the discriminator on the Batch and return the Loss
-        discLoss = await this.trainDiscBatch(discBatchSize);
+        discLoss = await this.trainDisBatch(discBatchSize);
 
         // Train the discriminator on the Batch and return the Loss
         genLoss = await this.trainGenBatch(genBatchSize);
@@ -475,7 +475,7 @@ class TerraGAN {
         return loss;
     }
 
-    async trainDiscBatch(batchSize) {
+    async trainDisBatch(batchSize) {
         // TODO ->>> USE TF TIDY instead of disposeing all manually
         // generate a batch of data and feed to the discriminator
         // some images that come out of here are real and some are fake
@@ -560,8 +560,8 @@ class TerraGAN {
 
     async trainGenBatch(batchSize) {
         // Get the shape of the Input/Output Data
-        const shapeA = [batchSize, this.dataLoader.height, this.dataLoader.width, this.dataLoader.numChannelsA];
-        const shapeB = [batchSize, this.dataLoader.height, this.dataLoader.width, this.dataLoader.numChannelsB];
+        const shapeA = [batchSize, this.inputHeight, this.inputWidth, this.inputChannels];
+        const shapeB = [batchSize, this.outputHeight, this.outputWidth, this.outputChannels];
 
         // Tensors to dispose of later
         let genInputA, genInputB, genResult0, genResult1, genResult;
@@ -885,8 +885,6 @@ class TerraGAN {
             x++;
         }
     }
-
-
 }
 
 class DataLoader {
