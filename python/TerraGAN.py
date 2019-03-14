@@ -594,7 +594,7 @@ modelTempDir = '../terra-models/temp'
 
 terraGAN = TerraGAN(
     summary=False,
-    GPU=2,
+    GPU=1,
     inputHeight = 256, 
     inputWidth = 256, 
     inputChannels = 1, 
