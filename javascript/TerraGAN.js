@@ -942,6 +942,7 @@ class DataLoader {
         for (let och of this.channels[1]) {
             outputChannels = outputChannels + och + '_';
         }
+        
         this.modelName = loc + size + scale + inputChannels + 'to_' + outputChannels
 
     }
